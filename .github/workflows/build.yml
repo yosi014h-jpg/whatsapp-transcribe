@@ -1,0 +1,62 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  WHISPER_COMMIT: 231638a0717b7822784297e5980965ffcec05810
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Get whisper.cpp
+        run: |
+          mkdir whisper && cd whisper
+          git init -q
+          git remote add origin https://github.com/ggml-org/whisper.cpp
+          git fetch -q --depth 1 origin "$WHISPER_COMMIT"
+          git checkout -q FETCH_HEAD
+
+      - name: Add our code and set Hebrew
+        run: |
+          PROJ=whisper/examples/whisper.android
+          cp -r app/. "$PROJ/app/"
+          sed -i 's/params.language = "en";/params.language = "he";/' "$PROJ/lib/src/main/jni/whisper/jni.c"
+          grep -q 'params.language = "he";' "$PROJ/lib/src/main/jni/whisper/jni.c"
+          sed -i "s/abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'/abiFilters 'arm64-v8a'/" "$PROJ/lib/build.gradle"
+          mkdir -p ~/.android
+          cp signing/debug.keystore ~/.android/debug.keystore
+
+      - name: Install NDK and CMake
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;25.2.9519653" "cmake;3.22.1" "platforms;android-34" > /dev/null
+
+      - name: Build
+        working-directory: whisper/examples/whisper.android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Publish APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp whisper/examples/whisper.android/app/build/outputs/apk/debug/app-debug.apk transcribe.apk
+          gh release create "build-${{ github.run_number }}" transcribe.apk \
+            --title "גרסה ${{ github.run_number }}" \
+            --notes "להורדה בטלפון: לחץ על transcribe.apk"
