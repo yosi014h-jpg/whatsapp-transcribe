@@ -1,6 +1,7 @@
 package com.whispercppdemo.ui.main
 
 import android.app.Application
+import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -18,6 +19,7 @@ import com.whispercpp.whisper.WhisperContext
 import com.whispercppdemo.media.AudioDecoder
 import com.whispercppdemo.tts.Speaker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -26,6 +28,10 @@ import java.io.IOException
 
 private const val LOG_TAG = "MainScreenViewModel"
 private const val WHATSAPP = "com.whatsapp"
+
+/** Hebrew-tuned Whisper turbo by ivrit.ai, in the format whisper.cpp reads. */
+private const val MODEL_URL = "https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin"
+private const val PREF_DOWNLOAD = "download_id"
 
 class MainScreenViewModel(private val application: Application) : ViewModel() {
 
@@ -38,28 +44,42 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     var modelReady by mutableStateOf(false)
         private set
     var ttsText by mutableStateOf("")
+    /** null = no download running; otherwise 0..1, or -1 when the size is not known yet */
+    var downloadProgress by mutableStateOf<Float?>(null)
+        private set
 
     private val modelFile = File(File(application.filesDir, "models").apply { mkdirs() }, "model.bin")
+    private val prefs = application.getSharedPreferences("model", 0)
+    private val downloadDir get() = application.getExternalFilesDir("models")!!.apply { mkdirs() }
+    private val downloadedModel get() = File(downloadDir, "ggml-model.bin")
+    private val downloadPart get() = File(downloadDir, "ggml-model.part")
+
+    /** A model the user picked wins over the downloaded one. */
+    private fun currentModel(): File? =
+        listOf(modelFile, downloadedModel).firstOrNull { it.exists() && it.length() > 0L }
     private var whisperContext: WhisperContext? = null
     private var pendingAudio: Uri? = null
     private val speaker = Speaker(application)
 
     init {
-        viewModelScope.launch { loadModel() }
+        val running = prefs.getLong(PREF_DOWNLOAD, -1L)
+        if (running >= 0 && currentModel() == null) watchDownload(running)
+        else viewModelScope.launch { loadModel() }
     }
 
     // ---------- מודל התמלול ----------
 
     private suspend fun loadModel() {
-        if (!modelFile.exists() || modelFile.length() == 0L) {
-            status = "אין עדיין מודל תמלול. לחץ למטה על \"בחר קובץ מודל\" ובחר את ggml-model.bin"
+        val file = currentModel()
+        if (file == null) {
+            status = "צריך להוריד את מודל התמלול לעברית. זה קורה פעם אחת (כ-1.6GB), ומשם הכל עובד בלי אינטרנט."
             return
         }
         isBusy = true
         status = "טוען את מודל התמלול (עד דקה)..."
         try {
             whisperContext = withContext(Dispatchers.IO) {
-                WhisperContext.createContextFromFile(modelFile.absolutePath)
+                WhisperContext.createContextFromFile(file.absolutePath)
             }
             modelReady = true
             status = "מוכן. שתף הודעה קולית מווטסאפ לאפליקציה, או בחר הקלטה."
@@ -69,6 +89,91 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         }
         isBusy = false
         runPending()
+    }
+
+    // ---------- הורדת המודל ----------
+
+    fun downloadModel(allowMobileData: Boolean) {
+        if (isBusy || downloadProgress != null) return
+        downloadPart.delete()
+        val request = DownloadManager.Request(Uri.parse(MODEL_URL))
+            .setTitle("מודל תמלול לעברית")
+            .setDescription("הורדה חד-פעמית, כ-1.6GB")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .setDestinationInExternalFilesDir(application, "models", downloadPart.name)
+            .setAllowedOverMetered(allowMobileData)
+            .setAllowedOverRoaming(false)
+        val id = application.getSystemService(DownloadManager::class.java).enqueue(request)
+        prefs.edit().putLong(PREF_DOWNLOAD, id).apply()
+        watchDownload(id)
+    }
+
+    fun cancelDownload() {
+        val id = prefs.getLong(PREF_DOWNLOAD, -1L)
+        if (id >= 0) application.getSystemService(DownloadManager::class.java).remove(id)
+        prefs.edit().remove(PREF_DOWNLOAD).apply()
+        downloadPart.delete()
+        downloadProgress = null
+        status = "ההורדה בוטלה."
+    }
+
+    private fun watchDownload(id: Long) {
+        downloadProgress = -1f
+        status = "מוריד את מודל התמלול. אפשר לסגור את האפליקציה, ההורדה ממשיכה ברקע."
+        viewModelScope.launch {
+            val dm = application.getSystemService(DownloadManager::class.java)
+            while (downloadProgress != null) {
+                val row = withContext(Dispatchers.IO) {
+                    dm.query(DownloadManager.Query().setFilterById(id))?.use { c ->
+                        if (!c.moveToFirst()) null
+                        else listOf(
+                            c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
+                            c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)),
+                            c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
+                            c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)),
+                        )
+                    }
+                }
+                if (row == null) {
+                    prefs.edit().remove(PREF_DOWNLOAD).apply()
+                    downloadProgress = null
+                    status = "ההורדה הופסקה. אפשר להתחיל שוב."
+                    return@launch
+                }
+                val (st, reason, done, total) = row
+                when (st.toInt()) {
+                    DownloadManager.STATUS_SUCCESSFUL -> {
+                        prefs.edit().remove(PREF_DOWNLOAD).apply()
+                        downloadProgress = null
+                        val ok = withContext(Dispatchers.IO) {
+                            downloadedModel.delete()
+                            downloadPart.renameTo(downloadedModel)
+                        }
+                        if (ok) loadModel() else status = "ההורדה הסתיימה אבל שמירת המודל נכשלה. נסה שוב."
+                        return@launch
+                    }
+                    DownloadManager.STATUS_FAILED -> {
+                        prefs.edit().remove(PREF_DOWNLOAD).apply()
+                        downloadProgress = null
+                        downloadPart.delete()
+                        status = "ההורדה נכשלה (קוד $reason). בדוק חיבור לאינטרנט ונסה שוב."
+                        return@launch
+                    }
+                    DownloadManager.STATUS_PAUSED -> {
+                        status = if (reason.toInt() == DownloadManager.PAUSED_QUEUED_FOR_WIFI)
+                            "ממתין ל-WiFi כדי להמשיך את ההורדה."
+                        else "ההורדה מושהית, תמשיך כשיהיה חיבור."
+                    }
+                    else -> {
+                        if (total > 0) {
+                            downloadProgress = done.toFloat() / total
+                            status = "מוריד את מודל התמלול: ${done / 1_048_576} מתוך ${total / 1_048_576} MB. אפשר לסגור את האפליקציה."
+                        }
+                    }
+                }
+                delay(1000)
+            }
+        }
     }
 
     fun importModel(uri: Uri) {

@@ -53,6 +53,22 @@ fun MainScreen(viewModel: MainScreenViewModel) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
+            if (!viewModel.modelReady && !viewModel.isBusy) {
+                val p = viewModel.downloadProgress
+                if (p == null) {
+                    Button(onClick = { viewModel.downloadModel(allowMobileData = false) }) {
+                        Text("הורד מודל עברית ב-WiFi (1.6GB)")
+                    }
+                    OutlinedButton(onClick = { viewModel.downloadModel(allowMobileData = true) }) {
+                        Text("הורד גם בגלישה סלולרית")
+                    }
+                } else {
+                    if (p >= 0f) Text("${(p * 100).toInt()}%", style = MaterialTheme.typography.titleMedium)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    OutlinedButton(onClick = { viewModel.cancelDownload() }) { Text("בטל הורדה") }
+                }
+            }
+
             Divider()
             Text("תמלול הודעה קולית", style = MaterialTheme.typography.titleMedium)
             Text(
