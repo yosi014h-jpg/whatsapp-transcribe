@@ -60,7 +60,7 @@ fun MainScreen(viewModel: MainScreenViewModel) {
                 val p = viewModel.downloadProgress
                 if (p == null) {
                     Button(onClick = { viewModel.downloadModel(allowMobileData = false) }) {
-                        Text("הורד מודל עברית ב-WiFi (1.6GB)")
+                        Text("הורד מודל עברית ב-WiFi (570MB)")
                     }
                     OutlinedButton(onClick = { viewModel.downloadModel(allowMobileData = true) }) {
                         Text("הורד גם בגלישה סלולרית")
@@ -88,13 +88,13 @@ fun MainScreen(viewModel: MainScreenViewModel) {
                     Text(viewModel.transcript, style = MaterialTheme.typography.bodyLarge)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { clipboard.setText(AnnotatedString(viewModel.transcript)) }) {
+                    Button(onClick = { clipboard.setText(AnnotatedString(viewModel.transcript)); viewModel.clearAll() }) {
                         Text("העתק")
                     }
                     OutlinedButton(onClick = { viewModel.shareTranscript() }) {
                         Text("שלח כטקסט")
                     }
-                    OutlinedButton(onClick = { viewModel.ttsText = viewModel.transcript }) {
+                    OutlinedButton(onClick = { viewModel.ttsText = viewModel.transcript; viewModel.clearTranscript() }) {
                         Text("להקראה")
                     }
                 }

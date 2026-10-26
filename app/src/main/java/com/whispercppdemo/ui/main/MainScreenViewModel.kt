@@ -30,7 +30,8 @@ private const val LOG_TAG = "MainScreenViewModel"
 private const val WHATSAPP = "com.whatsapp"
 
 /** Hebrew-tuned Whisper turbo by ivrit.ai, in the format whisper.cpp reads. */
-private const val MODEL_URL = "https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin"
+/** Fast compressed (q5_0) version of the ivrit.ai model, published by this repo's "Compress model" job. */
+private const val MODEL_URL = "https://github.com/yosi014h-jpg/whatsapp-transcribe/releases/download/model-q5_0/ggml-model-he-q5_0.bin"
 private const val PREF_DOWNLOAD = "download_id"
 
 class MainScreenViewModel(private val application: Application) : ViewModel() {
@@ -82,6 +83,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         rate = ttsPrefs.getFloat("rate", 1.0f)
         applyVoiceSettings()
         viewModelScope.launch { loadVoices() }
+        File(application.cacheDir, "tts").deleteRecursively()
     }
 
     // ---------- בחירת קול ----------
@@ -137,7 +139,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     private suspend fun loadModel() {
         val file = currentModel()
         if (file == null) {
-            status = "צריך להוריד את מודל התמלול לעברית. זה קורה פעם אחת (כ-1.6GB), ומשם הכל עובד בלי אינטרנט."
+            status = "צריך להוריד את מודל התמלול לעברית. זה קורה פעם אחת (כ-570MB), ומשם הכל עובד בלי אינטרנט."
             return
         }
         isBusy = true
@@ -150,7 +152,9 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
             status = "מוכן. שתף הודעה קולית מווטסאפ לאפליקציה, או בחר הקלטה."
         } catch (e: Exception) {
             Log.w(LOG_TAG, e)
-            status = "שגיאה בטעינת המודל: ${e.localizedMessage}"
+            // קובץ פגום (הורדה שנקטעה וכו'): מוחקים, כדי שאפשר יהיה להוריד מחדש בלחיצה.
+            file.delete()
+            status = "קובץ המודל היה פגום ונמחק. לחץ על \"הורד מודל עברית\" כדי להוריד אותו מחדש."
         }
         isBusy = false
         runPending()
@@ -163,7 +167,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         downloadPart.delete()
         val request = DownloadManager.Request(Uri.parse(MODEL_URL))
             .setTitle("מודל תמלול לעברית")
-            .setDescription("הורדה חד-פעמית, כ-1.6GB")
+            .setDescription("הורדה חד-פעמית, כ-570MB")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(application, "models", downloadPart.name)
             .setAllowedOverMetered(allowMobileData)
@@ -318,6 +322,16 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         transcribe(next)
     }
 
+    /** מוחק מהמסך את התמלול ואת טקסט ההקראה. שום דבר לא נשמר באפליקציה. */
+    fun clearTranscript() {
+        transcript = ""
+    }
+
+    fun clearAll() {
+        transcript = ""
+        ttsText = ""
+    }
+
     fun shareTranscript() {
         if (transcript.isBlank()) return
         val intent = Intent(Intent.ACTION_SEND).apply {
@@ -325,6 +339,8 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
             putExtra(Intent.EXTRA_TEXT, transcript)
         }
         openShare(intent)
+        clearAll()
+        status = "נשלח. התמלול נמחק מהאפליקציה."
     }
 
     // ---------- הקראה ----------
@@ -348,7 +364,8 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 openShare(intent)
-                status = "הקובץ מוכן. בחר איש קשר בווטסאפ."
+                clearAll()
+                status = "הקובץ מוכן. בחר איש קשר בווטסאפ. הטקסט נמחק מהאפליקציה."
             } catch (e: Exception) {
                 Log.w(LOG_TAG, e)
                 status = "שגיאה בהקראה: ${e.localizedMessage}"
