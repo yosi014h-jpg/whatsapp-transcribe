@@ -54,7 +54,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         private set
     var rate by mutableStateOf(1.0f)
         private set
-    private val prefs = application.getSharedPreferences("tts", android.content.Context.MODE_PRIVATE)
+    private val ttsPrefs = application.getSharedPreferences("tts", android.content.Context.MODE_PRIVATE)
     /** null = no download running; otherwise 0..1, or -1 when the size is not known yet */
     var downloadProgress by mutableStateOf<Float?>(null)
         private set
@@ -76,7 +76,61 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         val running = prefs.getLong(PREF_DOWNLOAD, -1L)
         if (running >= 0 && currentModel() == null) watchDownload(running)
         else viewModelScope.launch { loadModel() }
+
+        selectedVoice = ttsPrefs.getString("voice", null)
+        pitch = ttsPrefs.getFloat("pitch", 1.0f)
+        rate = ttsPrefs.getFloat("rate", 1.0f)
+        applyVoiceSettings()
+        viewModelScope.launch { loadVoices() }
     }
+
+    // ---------- בחירת קול ----------
+
+    private suspend fun loadVoices() {
+        try {
+            voices = speaker.hebrewVoices().map { it.name }
+            if (selectedVoice != null && selectedVoice !in voices) selectVoice(null)
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, e)
+        }
+    }
+
+    private fun applyVoiceSettings() {
+        speaker.voiceName = selectedVoice
+        speaker.pitch = pitch
+        speaker.rate = rate
+    }
+
+    fun selectVoice(name: String?) {
+        selectedVoice = name
+        ttsPrefs.edit().putString("voice", name).apply()
+        applyVoiceSettings()
+    }
+
+    fun updatePitch(value: Float) {
+        pitch = value
+        ttsPrefs.edit().putFloat("pitch", value).apply()
+        applyVoiceSettings()
+    }
+
+    fun updateRate(value: Float) {
+        rate = value
+        ttsPrefs.edit().putFloat("rate", value).apply()
+        applyVoiceSettings()
+    }
+
+    fun previewVoice() {
+        val text = ttsText.trim().ifEmpty { "שלום, זו בדיקה של הקול שנבחר." }
+        viewModelScope.launch {
+            try {
+                speaker.preview(text)
+            } catch (e: Exception) {
+                status = "שגיאה בהשמעה: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    fun stopPreview() = speaker.stop()
 
     // ---------- מודל התמלול ----------
 
