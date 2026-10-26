@@ -38,6 +38,7 @@ jobs:
           sed -i 's/params.language = "en";/params.language = "he";/' "$PROJ/lib/src/main/jni/whisper/jni.c"
           grep -q 'params.language = "he";' "$PROJ/lib/src/main/jni/whisper/jni.c"
           sed -i "s/abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'/abiFilters 'arm64-v8a'/" "$PROJ/lib/build.gradle"
+          sed -i "s/versionCode 1$/versionCode ${{ github.run_number }}/" "$PROJ/app/build.gradle"
           mkdir -p ~/.android
           cp signing/debug.keystore ~/.android/debug.keystore
 

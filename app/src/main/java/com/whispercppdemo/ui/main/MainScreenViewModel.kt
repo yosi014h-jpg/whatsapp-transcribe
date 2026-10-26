@@ -44,6 +44,17 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     var modelReady by mutableStateOf(false)
         private set
     var ttsText by mutableStateOf("")
+
+    /** שמות הקולות העבריים, וקול/גובה/מהירות שנבחרו (נשמרים בין הפעלות). */
+    var voices by mutableStateOf<List<String>>(emptyList())
+        private set
+    var selectedVoice by mutableStateOf<String?>(null)
+        private set
+    var pitch by mutableStateOf(1.0f)
+        private set
+    var rate by mutableStateOf(1.0f)
+        private set
+    private val prefs = application.getSharedPreferences("tts", android.content.Context.MODE_PRIVATE)
     /** null = no download running; otherwise 0..1, or -1 when the size is not known yet */
     var downloadProgress by mutableStateOf<Float?>(null)
         private set

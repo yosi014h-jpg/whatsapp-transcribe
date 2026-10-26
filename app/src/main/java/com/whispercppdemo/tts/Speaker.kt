@@ -8,6 +8,7 @@ import android.media.MediaMuxer
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -42,13 +43,48 @@ class Speaker(private val context: Context) {
         }
     }
 
-    suspend fun synthesizeToM4a(text: String): File {
-        val engine = engine()
+    var voiceName: String? = null
+    var pitch: Float = 1.0f
+    var rate: Float = 1.0f
 
-        val result = engine.setLanguage(Locale("he", "IL"))
-        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            throw IllegalStateException("אין קול עברי מותקן במנוע ההקראה (ראה במדריך: התקנת קול עברי)")
+    /** כל הקולות העבריים שמותקנים בטלפון ועובדים בלי אינטרנט. */
+    suspend fun hebrewVoices(): List<Voice> {
+        val engine = engine()
+        return (engine.voices ?: emptySet())
+            .filter { it.locale.language == "he" || it.locale.language == "iw" }
+            .filter { !it.isNetworkConnectionRequired }
+            .filter { !it.features.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
+            .sortedBy { it.name }
+    }
+
+    private suspend fun prepare(): TextToSpeech {
+        val engine = engine()
+        val chosen = voiceName?.let { name -> engine.voices?.firstOrNull { it.name == name } }
+        if (chosen != null) {
+            engine.voice = chosen
+        } else {
+            val result = engine.setLanguage(Locale("he", "IL"))
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                throw IllegalStateException("אין קול עברי מותקן במנוע ההקראה")
+            }
         }
+        engine.setPitch(pitch)
+        engine.setSpeechRate(rate)
+        return engine
+    }
+
+    /** השמעה ישירה ברמקול, לבדיקת הקול לפני שליחה. */
+    suspend fun preview(text: String) {
+        val engine = prepare()
+        engine.speak(text.take(TextToSpeech.getMaxSpeechInputLength()), TextToSpeech.QUEUE_FLUSH, null, "preview")
+    }
+
+    fun stop() {
+        tts?.stop()
+    }
+
+    suspend fun synthesizeToM4a(text: String): File {
+        val engine = prepare()
         if (text.length > TextToSpeech.getMaxSpeechInputLength()) {
             throw IllegalStateException("הטקסט ארוך מדי. מקסימום ${TextToSpeech.getMaxSpeechInputLength()} תווים")
         }

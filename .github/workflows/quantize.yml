@@ -1,0 +1,49 @@
+name: Compress model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/quantize.yml']
+
+permissions:
+  contents: write
+
+env:
+  WHISPER_COMMIT: 231638a0717b7822784297e5980965ffcec05810
+
+jobs:
+  quantize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Build quantize tool
+        run: |
+          mkdir whisper && cd whisper
+          git init -q
+          git remote add origin https://github.com/ggml-org/whisper.cpp
+          git fetch -q --depth 1 origin "$WHISPER_COMMIT"
+          git checkout -q FETCH_HEAD
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_TESTS=OFF > /dev/null
+          cmake --build build --target quantize -j 4 > /dev/null
+          ls build/bin
+
+      - name: Download Hebrew model
+        run: |
+          curl -sSL -o model.bin https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin
+          ls -la model.bin
+
+      - name: Compress (q5_0)
+        run: |
+          ./whisper/build/bin/quantize model.bin ggml-model-he-q5_0.bin q5_0
+          ls -la ggml-model-he-q5_0.bin
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "model-q5_0" ggml-model-he-q5_0.bin \
+            -R "${{ github.repository }}" \
+            --title "מודל עברית מכווץ" \
+            --notes "מודל ivrit.ai turbo בגרסה מכווצת (q5_0), מהיר יותר" || \
+          gh release upload "model-q5_0" ggml-model-he-q5_0.bin -R "${{ github.repository }}" --clobber

@@ -19,9 +19,12 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -107,6 +110,32 @@ fun MainScreen(viewModel: MainScreenViewModel) {
                     .heightIn(min = 120.dp),
                 label = { Text("הטקסט להקראה") }
             )
+            Text("קול", style = MaterialTheme.typography.titleSmall)
+            if (viewModel.voices.isEmpty()) {
+                Text("נמצא רק קול ברירת המחדל.", style = MaterialTheme.typography.bodySmall)
+            }
+            VoiceOption("ברירת מחדל", viewModel.selectedVoice == null) { viewModel.selectVoice(null) }
+            viewModel.voices.forEachIndexed { i, name ->
+                VoiceOption("קול ${i + 1}  ($name)", viewModel.selectedVoice == name) { viewModel.selectVoice(name) }
+            }
+
+            Text("גובה הקול: ${"%.1f".format(viewModel.pitch)} (נמוך יותר = עמוק יותר)", style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = viewModel.pitch,
+                onValueChange = { viewModel.updatePitch(it) },
+                valueRange = 0.5f..1.5f
+            )
+            Text("מהירות: ${"%.1f".format(viewModel.rate)}", style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = viewModel.rate,
+                onValueChange = { viewModel.updateRate(it) },
+                valueRange = 0.6f..1.6f
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { viewModel.previewVoice() }) { Text("השמע") }
+                OutlinedButton(onClick = { viewModel.stopPreview() }) { Text("עצור") }
+            }
             Button(
                 onClick = { viewModel.speakAndShare() },
                 enabled = !viewModel.isBusy
@@ -118,5 +147,13 @@ fun MainScreen(viewModel: MainScreenViewModel) {
                 enabled = !viewModel.isBusy
             ) { Text(if (viewModel.modelReady) "החלף קובץ מודל" else "בחר קובץ מודל") }
         }
+    }
+}
+
+@Composable
+private fun VoiceOption(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(selected = selected, onClick = onClick)
+        Text(label, style = MaterialTheme.typography.bodyMedium)
     }
 }
