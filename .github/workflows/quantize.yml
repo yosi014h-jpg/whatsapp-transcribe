@@ -2,6 +2,10 @@ name: Compress model
 
 on:
   workflow_dispatch:
+    inputs:
+      qtype:
+        description: quantization type
+        default: q4_0
   push:
     branches: [main]
     paths: ['.github/workflows/quantize.yml']
@@ -33,17 +37,17 @@ jobs:
           curl -sSL -o model.bin https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin
           ls -la model.bin
 
-      - name: Compress (q5_0)
+      - name: Compress
         run: |
-          ./whisper/build/bin/whisper-quantize model.bin ggml-model-he-q5_0.bin q5_0
-          ls -la ggml-model-he-q5_0.bin
+          ./whisper/build/bin/whisper-quantize model.bin ggml-model-he-${{ inputs.qtype || 'q5_0' }}.bin ${{ inputs.qtype || 'q5_0' }}
+          ls -la ggml-model-he-${{ inputs.qtype || 'q5_0' }}.bin
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "model-q5_0" ggml-model-he-q5_0.bin \
+          gh release create "model-${{ inputs.qtype || 'q5_0' }}" ggml-model-he-${{ inputs.qtype || 'q5_0' }}.bin \
             -R "${{ github.repository }}" \
             --title "מודל עברית מכווץ" \
-            --notes "מודל ivrit.ai turbo בגרסה מכווצת (q5_0), מהיר יותר" || \
-          gh release upload "model-q5_0" ggml-model-he-q5_0.bin -R "${{ github.repository }}" --clobber
+            --notes "מודל ivrit.ai turbo בגרסה מכווצת (${{ inputs.qtype || 'q5_0' }}), מהיר יותר" || \
+          gh release upload "model-${{ inputs.qtype || 'q5_0' }}" ggml-model-he-${{ inputs.qtype || 'q5_0' }}.bin -R "${{ github.repository }}" --clobber
