@@ -35,8 +35,8 @@ import androidx.compose.ui.unit.dp
 fun MainScreen(viewModel: MainScreenViewModel) {
     val clipboard = LocalClipboardManager.current
 
-    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) viewModel.importModel(uri)
+    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) viewModel.importModel(uris)
     }
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.transcribe(uri)

@@ -241,17 +241,25 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         }
     }
 
-    fun importModel(uri: Uri) {
-        if (isBusy) return
+    fun importModel(uri: Uri) = importModel(listOf(uri))
+
+    /** קובץ מודל אחד, או כמה חלקים (part1, part2...) שמחוברים לפי סדר השמות. */
+    fun importModel(uris: List<Uri>) {
+        if (isBusy || uris.isEmpty()) return
+        val ordered = uris.sortedBy { displayName(it) }
         viewModelScope.launch {
             isBusy = true
             status = "מעתיק את המודל לאפליקציה (כמה דקות, לא לסגור)..."
             try {
                 withContext(Dispatchers.IO) {
                     val tmp = File(modelFile.parentFile, "model.tmp")
-                    application.contentResolver.openInputStream(uri)?.use { input ->
-                        tmp.outputStream().use { input.copyTo(it, 1 shl 20) }
-                    } ?: throw IOException("לא ניתן לפתוח את הקובץ")
+                    tmp.outputStream().use { out ->
+                        for (part in ordered) {
+                            application.contentResolver.openInputStream(part)?.use { input ->
+                                input.copyTo(out, 1 shl 20)
+                            } ?: throw IOException("לא ניתן לפתוח את הקובץ")
+                        }
+                    }
                     if (!tmp.renameTo(modelFile)) throw IOException("שמירת המודל נכשלה")
                 }
                 whisperContext?.release()
@@ -267,6 +275,10 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
             loadModel()
         }
     }
+
+    private fun displayName(uri: Uri): String =
+        application.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: uri.toString()
 
     // ---------- תמלול ----------
 
