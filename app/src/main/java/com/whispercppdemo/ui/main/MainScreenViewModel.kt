@@ -300,9 +300,19 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
             try {
                 val samples = withContext(Dispatchers.IO) { AudioDecoder.decode(application, uri) }
                 val seconds = samples.size / 16_000
-                status = "מתמלל $seconds שניות שמע..."
                 val start = System.currentTimeMillis()
-                val text = ctx.transcribeData(samples, printTimestamp = false).trim()
+                val ticker = viewModelScope.launch {
+                    while (true) {
+                        val passed = (System.currentTimeMillis() - start) / 1000
+                        status = "מתמלל הקלטה של $seconds שניות... ($passed שניות עברו)"
+                        kotlinx.coroutines.delay(1000)
+                    }
+                }
+                val text = try {
+                    ctx.transcribeData(samples, printTimestamp = false).trim()
+                } finally {
+                    ticker.cancel()
+                }
                 val took = (System.currentTimeMillis() - start) / 1000
                 transcript = text.ifEmpty { "(לא זוהה דיבור)" }
                 status = "התמלול הסתיים ($took שניות)."
