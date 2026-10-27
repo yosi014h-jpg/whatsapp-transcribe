@@ -30,8 +30,8 @@ private const val LOG_TAG = "MainScreenViewModel"
 private const val WHATSAPP = "com.whatsapp"
 
 /** Hebrew-tuned Whisper turbo by ivrit.ai, in the format whisper.cpp reads. */
-/** Fast compressed (q5_0) version of the ivrit.ai model, published by this repo's "Compress model" job. */
-private const val MODEL_URL = "https://github.com/yosi014h-jpg/whatsapp-transcribe/releases/download/model-q5_0/ggml-model-he-q5_0.bin"
+/** Fast compressed (q4_0) version of the ivrit.ai model, published by this repo's "Compress model" job. */
+private const val MODEL_URL = "https://github.com/yosi014h-jpg/whatsapp-transcribe/releases/download/model-q4_0/ggml-model-he-q4_0.bin"
 private const val PREF_DOWNLOAD = "download_id"
 
 class MainScreenViewModel(private val application: Application) : ViewModel() {
@@ -43,6 +43,9 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     var isBusy by mutableStateOf(false)
         private set
     var modelReady by mutableStateOf(false)
+        private set
+    /** the loaded model is an older, bigger one; a faster one can be downloaded */
+    var canUpgrade by mutableStateOf(false)
         private set
     var ttsText by mutableStateOf("")
 
@@ -139,7 +142,15 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     private suspend fun loadModel() {
         val file = currentModel()
         if (file == null) {
-            status = "צריך להוריד את מודל התמלול לעברית. זה קורה פעם אחת (כ-570MB), ומשם הכל עובד בלי אינטרנט."
+            status = "צריך להוריד את מודל התמלול לעברית. זה קורה פעם אחת (כ-450MB), ומשם הכל עובד בלי אינטרנט."
+            return
+        }
+        // the engine is built for newer phones (like the S26); on an older CPU it would crash instead of working
+        val cpuOk = withContext(Dispatchers.IO) {
+            try { java.io.File("/proc/cpuinfo").readText().contains("i8mm") } catch (e: Exception) { true }
+        }
+        if (!cpuOk) {
+            status = "המעבד בטלפון הזה ישן מדי לגרסה המהירה של המנוע."
             return
         }
         isBusy = true
@@ -149,7 +160,10 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
                 WhisperContext.createContextFromFile(file.absolutePath)
             }
             modelReady = true
-            status = "מוכן. שתף הודעה קולית מווטסאפ לאפליקציה, או בחר הקלטה."
+            val mb = file.length() / 1_048_576
+            canUpgrade = file.length() > 500_000_000
+            status = "מוכן (מודל $mb MB). שתף הודעה קולית מווטסאפ לאפליקציה, או בחר הקלטה." +
+                (if (canUpgrade) "\nיש מודל מהיר יותר: כפתור \"החלף למודל מהיר\" למטה." else "")
         } catch (e: Exception) {
             Log.w(LOG_TAG, e)
             // קובץ פגום (הורדה שנקטעה וכו'): מוחקים, כדי שאפשר יהיה להוריד מחדש בלחיצה.
@@ -167,7 +181,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         downloadPart.delete()
         val request = DownloadManager.Request(Uri.parse(MODEL_URL))
             .setTitle("מודל תמלול לעברית")
-            .setDescription("הורדה חד-פעמית, כ-570MB")
+            .setDescription("הורדה חד-פעמית, כ-450MB")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(application, "models", downloadPart.name)
             .setAllowedOverMetered(allowMobileData)
@@ -214,7 +228,12 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
                     DownloadManager.STATUS_SUCCESSFUL -> {
                         prefs.edit().remove(PREF_DOWNLOAD).apply()
                         downloadProgress = null
+                        whisperContext?.release()
+                        whisperContext = null
+                        modelReady = false
                         val ok = withContext(Dispatchers.IO) {
+                            // the new model replaces any older one (picked by hand or downloaded before)
+                            modelFile.delete()
                             downloadedModel.delete()
                             downloadPart.renameTo(downloadedModel)
                         }

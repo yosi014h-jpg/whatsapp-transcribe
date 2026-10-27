@@ -62,7 +62,7 @@ fun MainScreen(viewModel: MainScreenViewModel) {
                 val p = viewModel.downloadProgress
                 if (p == null) {
                     Button(onClick = { viewModel.downloadModel(allowMobileData = false) }) {
-                        Text("הורד מודל עברית ב-WiFi (570MB)")
+                        Text("הורד מודל עברית ב-WiFi (450MB)")
                     }
                     OutlinedButton(onClick = { viewModel.downloadModel(allowMobileData = true) }) {
                         Text("הורד גם בגלישה סלולרית")
@@ -150,6 +150,12 @@ fun MainScreen(viewModel: MainScreenViewModel) {
             ) { Text("הקרא ושתף לווטסאפ") }
 
             Divider()
+            if (viewModel.modelReady && viewModel.canUpgrade && viewModel.downloadProgress == null) {
+                Button(
+                    onClick = { viewModel.downloadModel(allowMobileData = true) },
+                    enabled = !viewModel.isBusy
+                ) { Text("החלף למודל מהיר (450MB)") }
+            }
             OutlinedButton(
                 onClick = { modelPicker.launch(arrayOf("*/*")) },
                 enabled = !viewModel.isBusy
