@@ -343,6 +343,24 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         status = "נשלח. התמלול נמחק מהאפליקציה."
     }
 
+    /** שולח את התמלול לליאו, שפותח ממנו משימה חדשה. */
+    fun sendToLeo() {
+        if (transcript.isBlank()) return
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, transcript)
+            setPackage("com.shalom.leo")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            application.startActivity(intent)
+            clearAll()
+            status = "נשלח לליאו. התמלול נמחק מהאפליקציה."
+        } catch (e: ActivityNotFoundException) {
+            status = "ליאו לא מותקן, או שהגרסה שלו ישנה ועוד לא מקבלת טקסט. צריך לעדכן אותו."
+        }
+    }
+
     // ---------- הקראה ----------
 
     fun speakAndShare() {
