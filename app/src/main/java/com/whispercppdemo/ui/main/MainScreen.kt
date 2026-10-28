@@ -54,7 +54,7 @@ fun MainScreen(viewModel: MainScreenViewModel) {
         ) {
             Text("תמלול והקראה", style = MaterialTheme.typography.headlineSmall)
             Text(viewModel.status, style = MaterialTheme.typography.bodyMedium)
-            if (viewModel.isBusy) {
+            if (viewModel.isBusy || viewModel.transcribing) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
@@ -89,7 +89,7 @@ fun MainScreen(viewModel: MainScreenViewModel) {
                 SelectionContainer {
                     Text(viewModel.transcript, style = MaterialTheme.typography.bodyLarge)
                 }
-                FlowRow(
+                if (!viewModel.transcribing) FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {

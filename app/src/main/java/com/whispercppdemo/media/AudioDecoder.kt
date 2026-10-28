@@ -6,51 +6,54 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
  * ממיר כל קובץ שמע שאנדרואיד יודע לפענח (כולל הודעות קוליות של ווטסאפ: ogg/opus)
- * למערך דגימות מונו ב-16kHz, הפורמט ש-Whisper מצפה לו.
+ * לדגימות מונו ב-16kHz, הפורמט ש-Whisper מצפה לו.
+ *
+ * הדגימות נכתבות לקובץ (16 ביט), לא לזיכרון, כדי שגם הקלטה של כמה שעות תעבוד.
  */
 object AudioDecoder {
 
-    private const val TARGET_RATE = 16_000
+    const val RATE = 16_000
 
-    fun decode(context: Context, uri: Uri): FloatArray {
-        // מעתיקים קודם לקובץ זמני: ההרשאה לקובץ של ווטסאפ זמנית.
-        val tmp = File(context.cacheDir, "incoming_audio")
+    /** מעתיק את הקובץ המשותף לאפליקציה: ההרשאה של ווטסאפ לקובץ זמנית. */
+    fun copyIn(context: Context, uri: Uri, dest: File) {
         context.contentResolver.openInputStream(uri)?.use { input ->
-            tmp.outputStream().use { input.copyTo(it) }
+            dest.outputStream().use { input.copyTo(it, 1 shl 16) }
         } ?: throw IllegalStateException("לא הצלחתי לפתוח את קובץ השמע")
-        try {
-            return decodeFile(tmp)
-        } finally {
-            tmp.delete()
-        }
     }
 
-    private fun decodeFile(file: File): FloatArray {
+    /** מפענח את [source] ל-[pcmOut] (16kHz, מונו, 16 ביט). מחזיר את מספר הדגימות. */
+    fun decodeToPcm(source: File, pcmOut: File): Long {
         val extractor = MediaExtractor()
-        extractor.setDataSource(file.absolutePath)
+        extractor.setDataSource(source.absolutePath)
 
         val trackIndex = (0 until extractor.trackCount).firstOrNull {
             extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
-        } ?: throw IllegalStateException("לא נמצא ערוץ שמע בקובץ")
+        } ?: run {
+            extractor.release()
+            throw IllegalStateException("לא נמצא ערוץ שמע בקובץ")
+        }
 
         extractor.selectTrack(trackIndex)
         val format = extractor.getTrackFormat(trackIndex)
         val mime = format.getString(MediaFormat.KEY_MIME)!!
 
-        var sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
         var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
         var isFloat = false
+        var resampler = Resampler(format.getInteger(MediaFormat.KEY_SAMPLE_RATE))
 
         val codec = MediaCodec.createDecoderByType(mime)
         codec.configure(format, null, null, 0)
         codec.start()
 
-        val mono = FloatBuilder()
+        val out = PcmWriter(pcmOut)
         val info = MediaCodec.BufferInfo()
         var inputDone = false
         var outputDone = false
@@ -75,7 +78,7 @@ object AudioDecoder {
                 val outIndex = codec.dequeueOutputBuffer(info, 10_000)
                 if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     val outFormat = codec.outputFormat
-                    sampleRate = outFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    resampler = Resampler(outFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE))
                     channels = outFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                     isFloat = outFormat.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
                         outFormat.getInteger(MediaFormat.KEY_PCM_ENCODING) == AudioFormat.ENCODING_PCM_FLOAT
@@ -89,52 +92,77 @@ object AudioDecoder {
                         while (fb.remaining() >= channels) {
                             var sum = 0f
                             repeat(channels) { sum += fb.get() }
-                            mono.add(sum / channels)
+                            resampler.push(sum / channels, out)
                         }
                     } else {
                         val sb = buffer.asShortBuffer()
                         while (sb.remaining() >= channels) {
                             var sum = 0f
                             repeat(channels) { sum += sb.get() / 32768f }
-                            mono.add(sum / channels)
+                            resampler.push(sum / channels, out)
                         }
                     }
                     codec.releaseOutputBuffer(outIndex, false)
-                    if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        outputDone = true
-                    }
+                    if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true
                 }
             }
         } finally {
             codec.stop()
             codec.release()
             extractor.release()
+            out.close()
         }
 
-        if (mono.size == 0) throw IllegalStateException("הקובץ ריק או שלא ניתן לפענח אותו")
-        return resample(mono.data, mono.size, sampleRate)
+        if (out.count == 0L) throw IllegalStateException("הקובץ ריק או שלא ניתן לפענח אותו")
+        return out.count
     }
 
-    /** המרת קצב דגימה ל-16kHz בממוצע פשוט (מספיק לדיבור). */
-    private fun resample(input: FloatArray, n: Int, rate: Int): FloatArray {
-        if (rate == TARGET_RATE) return input.copyOf(n)
-        val ratio = rate.toDouble() / TARGET_RATE
-        val outLen = (n / ratio).toInt()
-        return FloatArray(outLen) { i ->
-            val start = (i * ratio).toInt().coerceAtMost(n - 1)
-            val stop = ((i + 1) * ratio).toInt().coerceIn(start + 1, n)
-            var sum = 0f
-            for (k in start until stop) sum += input[k]
-            (sum / (stop - start)).coerceIn(-1f, 1f)
+    /** קורא [count] דגימות מתוך קובץ ה-PCM, החל מ-[start]. */
+    fun readPcm(pcm: File, start: Long, count: Int): FloatArray {
+        val bytes = ByteArray(count * 2)
+        RandomAccessFile(pcm, "r").use { f ->
+            f.seek(start * 2)
+            f.readFully(bytes)
+        }
+        val sb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        return FloatArray(count) { sb.get(it) / 32768f }
+    }
+
+    /** המרת קצב דגימה ל-16kHz בזמן הפענוח: ממוצע של הדגימות בכל חלון (מספיק לדיבור). */
+    private class Resampler(rate: Int) {
+        private val step = rate.toDouble() / RATE
+        private var inIndex = 0L
+        private var outIndex = 0L
+        private var acc = 0f
+        private var cnt = 0
+
+        fun push(v: Float, out: PcmWriter) {
+            acc += v
+            cnt++
+            inIndex++
+            if (inIndex >= (outIndex + 1) * step) {
+                out.write(acc / cnt)
+                acc = 0f
+                cnt = 0
+                outIndex++
+            }
         }
     }
 
-    private class FloatBuilder {
-        var data = FloatArray(16_000 * 60)
-        var size = 0
-        fun add(v: Float) {
-            if (size == data.size) data = data.copyOf(data.size * 2)
-            data[size++] = v
+    private class PcmWriter(file: File) {
+        private val stream = BufferedOutputStream(file.outputStream(), 1 shl 16)
+        private val two = ByteArray(2)
+        var count = 0L
+            private set
+
+        fun write(v: Float) {
+            val s = (v.coerceIn(-1f, 1f) * 32767f).toInt()
+            two[0] = (s and 0xff).toByte()
+            two[1] = ((s shr 8) and 0xff).toByte()
+            stream.write(two)
+            count++
         }
+
+        fun close() = stream.close()
     }
 }

@@ -16,6 +16,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.whispercpp.whisper.WhisperContext
+import com.whispercppdemo.Engine
+import com.whispercppdemo.TranscribeService
 import com.whispercppdemo.media.AudioDecoder
 import com.whispercppdemo.tts.Speaker
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +43,9 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     var transcript by mutableStateOf("")
         private set
     var isBusy by mutableStateOf(false)
+        private set
+    /** true while a recording is being transcribed (in the app or in the background) */
+    var transcribing by mutableStateOf(false)
         private set
     var modelReady by mutableStateOf(false)
         private set
@@ -72,7 +77,10 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     /** A model the user picked wins over the downloaded one. */
     private fun currentModel(): File? =
         listOf(modelFile, downloadedModel).firstOrNull { it.exists() && it.length() > 0L }
-    private var whisperContext: WhisperContext? = null
+    /** the engine is shared with the background service, so it outlives this screen */
+    private var whisperContext: WhisperContext?
+        get() = Engine.context
+        set(v) { Engine.context = v }
     private var pendingAudio: Uri? = null
     private val speaker = Speaker(application)
 
@@ -87,6 +95,19 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         applyVoiceSettings()
         viewModelScope.launch { loadVoices() }
         File(application.cacheDir, "tts").deleteRecursively()
+        viewModelScope.launch { Engine.state.collect { showJob(it) } }
+    }
+
+    private fun showJob(j: Engine.Job) {
+        transcribing = j.running
+        if (j.running || j.finished) transcript = j.text
+        when {
+            j.running && j.totalSec == 0 -> status = "מכין את ההקלטה... (${j.elapsedSec} שניות)"
+            j.running -> status = "מתמלל: ${j.doneSec} מתוך ${j.totalSec} שניות (${j.elapsedSec} שניות עברו).\n" +
+                "אפשר לצאת מהאפליקציה, תגיע התראה כשזה מוכן."
+            j.finished && j.error.isNotEmpty() -> status = "שגיאה בתמלול: ${j.error}"
+            j.finished -> status = "התמלול הסתיים (${j.elapsedSec} שניות)."
+        }
     }
 
     // ---------- בחירת קול ----------
@@ -156,7 +177,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         isBusy = true
         status = "טוען את מודל התמלול (עד דקה)..."
         try {
-            whisperContext = withContext(Dispatchers.IO) {
+            if (whisperContext == null) whisperContext = withContext(Dispatchers.IO) {
                 WhisperContext.createContextFromFile(file.absolutePath)
             }
             modelReady = true
@@ -178,6 +199,10 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
 
     fun downloadModel(allowMobileData: Boolean) {
         if (isBusy || downloadProgress != null) return
+        if (transcribing) {
+            status = "חכה שהתמלול הנוכחי יסתיים, ואז אפשר להחליף מודל."
+            return
+        }
         downloadPart.delete()
         val request = DownloadManager.Request(Uri.parse(MODEL_URL))
             .setTitle("מודל תמלול לעברית")
@@ -269,6 +294,10 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     /** קובץ מודל אחד, או כמה חלקים (part1, part2...) שמחוברים לפי סדר השמות. */
     fun importModel(uris: List<Uri>) {
         if (isBusy || uris.isEmpty()) return
+        if (transcribing) {
+            status = "חכה שהתמלול הנוכחי יסתיים, ואז אפשר להחליף מודל."
+            return
+        }
         val ordered = uris.sortedBy { displayName(it) }
         viewModelScope.launch {
             isBusy = true
@@ -308,39 +337,20 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     fun transcribe(uri: Uri) {
         if (!modelReady || isBusy) {
             pendingAudio = uri
-            if (!modelReady && !isBusy) status = "קודם צריך לבחור קובץ מודל, ואז התמלול יתחיל לבד."
+            if (!modelReady && !isBusy) status = "קודם צריך מודל תמלול, ואז התמלול יתחיל לבד."
             return
         }
         viewModelScope.launch {
-            val ctx = whisperContext ?: return@launch
-            isBusy = true
-            transcript = ""
-            status = "מפענח את ההקלטה..."
+            status = "מכין את ההקלטה..."
             try {
-                val samples = withContext(Dispatchers.IO) { AudioDecoder.decode(application, uri) }
-                val seconds = samples.size / 16_000
-                val start = System.currentTimeMillis()
-                val ticker = viewModelScope.launch {
-                    while (true) {
-                        val passed = (System.currentTimeMillis() - start) / 1000
-                        status = "מתמלל הקלטה של $seconds שניות... ($passed שניות עברו)"
-                        kotlinx.coroutines.delay(1000)
-                    }
-                }
-                val text = try {
-                    ctx.transcribeData(samples, printTimestamp = false).trim()
-                } finally {
-                    ticker.cancel()
-                }
-                val took = (System.currentTimeMillis() - start) / 1000
-                transcript = text.ifEmpty { "(לא זוהה דיבור)" }
-                status = "התמלול הסתיים ($took שניות)."
+                val dir = File(application.cacheDir, "incoming").apply { mkdirs() }
+                val copy = File(dir, "a_${System.currentTimeMillis()}")
+                withContext(Dispatchers.IO) { AudioDecoder.copyIn(application, uri, copy) }
+                TranscribeService.start(application, copy)
             } catch (e: Exception) {
                 Log.w(LOG_TAG, e)
-                status = "שגיאה בתמלול: ${e.localizedMessage}"
+                status = "שגיאה בקריאת ההקלטה: ${e.localizedMessage}"
             }
-            isBusy = false
-            runPending()
         }
     }
 
@@ -353,10 +363,12 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
 
     /** מוחק מהמסך את התמלול ואת טקסט ההקראה. שום דבר לא נשמר באפליקציה. */
     fun clearTranscript() {
+        Engine.clearText()
         transcript = ""
     }
 
     fun clearAll() {
+        Engine.clearText()
         transcript = ""
         ttsText = ""
     }
@@ -439,10 +451,6 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
 
     override fun onCleared() {
         speaker.shutdown()
-        runBlocking {
-            whisperContext?.release()
-            whisperContext = null
-        }
     }
 
     companion object {
